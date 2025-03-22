@@ -2,7 +2,7 @@ import csv
 import requests
 import time
 import random
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 # List of websites and their configurations
 websites = [
     {
@@ -131,47 +131,63 @@ def build_headers(referer, origin):
     }
 
 # Post comments for one website
-def post_comments(website):
-    print(f"\nStarting comments for: {website['name']}")
-    with open(website['csv_file'], mode='r', encoding='utf-8') as file:
+def post_comment_to_site(website, comment, author, email, idx):
+    payload = {
+        'comment': comment,
+        'author': author,
+        'email': email,
+        'url': '',
+        'submit': 'Post Comment',
+        'comment_post_ID': website['comment_post_ID'],
+        'comment_parent': 0
+    }
+
+    headers = build_headers(website['referer'], website['origin'])
+    cookies = website.get('cookies', None)
+
+    try:
+        response = requests.post(
+            website['url'],
+            headers=headers,
+            data=payload,
+            cookies=cookies,
+            timeout=10
+        )
+        if response.status_code == 200:
+            print(f"✅ [{website['name']}] Comment #{idx} posted by {author}")
+        else:
+            print(f"❌ [{website['name']}] Failed ({response.status_code}) for {author}")
+            print(f"Response snippet: {response.text[:200]}...")
+    except Exception as e:
+        print(f"⚠️ [{website['name']}] Error for {author}: {str(e)}")
+
+def post_comments_parallel(csv_file):
+    with open(csv_file, mode='r', encoding='utf-8') as file:
         reader = csv.DictReader(file)
         for idx, row in enumerate(reader, start=1):
             comment = row['comment']
             author = row['author']
             email = row['email']
 
-            payload = {
-                'comment': comment,
-                'author': author,
-                'email': email,
-                'url': '',
-                'submit': 'Post Comment',
-                'comment_post_ID': website['comment_post_ID'],
-                'comment_parent': 0
-            }
+            print(f"\n🚀 Sending comment #{idx} to all sites at the same time...")
 
-            headers = build_headers(website['referer'], website['origin'])
+            with ThreadPoolExecutor(max_workers=len(websites)) as executor:
+                futures = []
+                for website in websites:
+                    futures.append(executor.submit(post_comment_to_site, website, comment, author, email, idx))
 
-            try:
-                response = requests.post(website['url'], headers=headers, data=payload, timeout=10)
-                if response.status_code == 200:
-                    print(f"✅ [{website['name']}] Comment #{idx} posted by {author}")
-                else:
-                    print(f"❌ [{website['name']}] Failed ({response.status_code}) for {author}")
-                    print(f"Response: {response.text[:200]}...")  # Print snippet for debugging
+                # Wait for all sites to finish posting this comment
+                for future in as_completed(futures):
+                    future.result()  # This will raise any exception inside the thread if exists
 
-            except Exception as e:
-                print(f"⚠️ [{website['name']}] Error for {author}: {str(e)}")
-
-            # Delay between comments (5-10 seconds random)
+            # Delay after each round of comments (optional)
             delay = random.randint(5, 10)
-            print(f"⏳ Waiting {delay} seconds before next comment...")
+            print(f"\n⏳ Waiting {delay} seconds before next comment...\n")
             time.sleep(delay)
 
-# Main function to process all websites
 def main():
-    for site in websites:
-        post_comments(site)
+    csv_file = 'comments.csv'
+    post_comments_parallel(csv_file)
 
 if __name__ == '__main__':
     main()
